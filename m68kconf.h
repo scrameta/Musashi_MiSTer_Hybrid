@@ -28,6 +28,7 @@
  */
 
 
+#include <stdio.h>
 
 #ifndef M68KCONF__HEADER
 #define M68KCONF__HEADER
@@ -89,8 +90,9 @@
  * If off, all interrupts will be autovectored and all interrupt requests will
  * auto-clear when the interrupt is serviced.
  */
-#define M68K_EMULATE_INT_ACK        OPT_OFF
-#define M68K_INT_ACK_CALLBACK(A)    your_int_ack_handler_function(A)
+#define M68K_EMULATE_INT_ACK        OPT_SPECIFY_HANDLER
+unsigned int handle_irq(unsigned int);
+#define M68K_INT_ACK_CALLBACK(A)    handle_irq(A)
 
 
 /* If ON, CPU will call the breakpoint acknowledge callback when it encounters
@@ -161,8 +163,10 @@
 /* If ON, CPU will call the instruction hook callback before every
  * instruction.
  */
+//#define M68K_INSTRUCTION_HOOK       OPT_SPECIFY_HANDLER
 #define M68K_INSTRUCTION_HOOK       OPT_OFF
-#define M68K_INSTRUCTION_CALLBACK(pc) your_instruction_hook_function(pc)
+void m68hook(int pc);
+#define M68K_INSTRUCTION_CALLBACK(pc) m68hook(pc)
 
 
 /* If ON, the CPU will emulate the 4-byte prefetch queue of a real 68000 */
@@ -186,7 +190,7 @@
 
 /* Emulate PMMU : if you enable this, there will be a test to see if the current chip has some enabled pmmu added to every memory access,
  * so enable this only if it's useful */
-#define M68K_EMULATE_PMMU   OPT_ON
+#define M68K_EMULATE_PMMU   OPT_OFF
 
 /* ----------------------------- COMPATIBILITY ---------------------------- */
 
@@ -206,5 +210,138 @@
 /* ======================================================================== */
 /* ============================== END OF FILE ============================= */
 /* ======================================================================== */
+
+#include <byteswap.h>
+extern unsigned char volatile * chipram;
+extern unsigned char volatile * rtgram;
+extern unsigned char volatile * chiprom;
+extern unsigned char volatile * fastram;
+extern unsigned char volatile * irqs;
+extern unsigned int addr;
+extern unsigned int chip_span;
+extern unsigned int fast_start;
+extern unsigned int rtg_start;
+extern unsigned int fast_span;
+extern unsigned int fast_base ;
+
+extern long count;
+extern long chipcount;
+extern long fastcount;
+static inline char validate_addr(unsigned int address, void volatile * * real_address)
+{
+	char ok = 0;
+	int tmp = address>>16;
+
+/*	++count;
+	if (0==(count&0xffff))
+	{
+		fprintf(stderr,"Count:%ld chip:%f fast:%f\n",count,((double)chipcount)/count,((double)fastcount)/count);
+		count = 0;
+		chipcount = 0;
+		fastcount = 0;
+	}*/
+
+	//fprintf(stderr,"%d\n",address);
+	if (tmp<0xf0)
+	{
+		*real_address = address+chipram;
+		ok = 1;
+		//++chipcount;
+		//fprintf(stderr,"CHIP f0:%d\n",address);
+	}
+	else if (tmp<0x100)
+	{
+		*real_address = address+chiprom;
+		ok = 1;
+		//++chipcount;
+		//fprintf(stderr,"CHIP f1:%d\n",address);
+	}
+	
+	else if (tmp>=0x200 && tmp<0x280) //0x200 0000
+	{
+		*real_address = (address-rtg_start)+rtgram;
+		ok = 1;
+	//	fprintf(stderr,"not ok\n");
+	}
+	else if (tmp<0x4000) //0x4000 0000
+	{
+		ok = 0;
+	//	fprintf(stderr,"not ok\n");
+	}
+	else if (tmp<0x5800) //(fast_start+fast_span))
+	{
+		*real_address = (address-fast_start)+fastram;
+		ok = 2;
+	//	++fastcount;
+	//	fprintf(stderr,"fast:%d\n",address);
+	}
+	return ok;
+}
+
+static inline unsigned int  m68k_read_memory_8(unsigned int address)
+{
+	void volatile * address2;
+	if (!validate_addr(address,&address2)) return 0;
+	unsigned char res2 = *((unsigned char volatile *)(address2));
+	//printf("Read8:%08x:%02x\n",address,res2);
+	return res2;
+}
+static inline unsigned int  m68k_read_memory_16(unsigned int address)
+{
+	void volatile * address2;
+	if (!validate_addr(address,&address2)) return 0;
+	unsigned short res = *((unsigned short volatile *)(address2));
+	unsigned short res2 = __bswap_16(res);
+	//printf("Read16:%08x:%04x\n",address,res2);
+	return res2;
+}
+static inline unsigned int  m68k_read_memory_32(unsigned int address)
+{
+/*	void volatile * address2;
+	if (!validate_addr(address,&address2)) return 0;
+	unsigned int res = *((unsigned int volatile *)(address2));
+	unsigned int res2 = __bswap_32(res);
+	//printf("Read32:%08x:%08x\n",address,res2);
+	return res2;*/
+
+
+	if (!(address&3))
+	{
+		void volatile * address2;
+		if (!validate_addr(address,&address2)) return 0;
+		return __bswap_32(*((unsigned long volatile *)(address2)));
+	}
+	else
+	{
+		unsigned int res = (m68k_read_memory_16(address) << 16) | m68k_read_memory_16(address+2);
+		return res;
+	}
+}
+static inline void m68k_write_memory_8(unsigned int address, unsigned int value)
+{
+	void volatile * address2;
+	if (!validate_addr(address,&address2)) return;
+	*((unsigned char volatile *)(address2)) = value;
+}
+static inline void m68k_write_memory_16(unsigned int address, unsigned int value)
+{
+	void volatile * address2;
+	if (!validate_addr(address,&address2)) return;
+	*((unsigned short volatile *)(address2)) = __bswap_16(value);
+}
+static inline void m68k_write_memory_32(unsigned int address, unsigned int value)
+{
+	if (!(address&3))
+	{
+		void volatile * address2;
+		if (!validate_addr(address,&address2)) return;
+		*((unsigned long volatile *)(address2)) = __bswap_32(value);
+	}
+	else
+	{
+		m68k_write_memory_16(address,value>>16);
+		m68k_write_memory_16(address+2,value&0xffff);
+	}
+}
 
 #endif /* M68KCONF__HEADER */

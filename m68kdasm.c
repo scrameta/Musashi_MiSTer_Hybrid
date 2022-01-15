@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "m68k.h"
+#include "m68kconf.h"
 
 #ifndef uint32
 #define uint32 uint
